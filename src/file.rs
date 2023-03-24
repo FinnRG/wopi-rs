@@ -15,16 +15,8 @@ pub struct FileRequest<B> {
 }
 
 #[derive(Debug, Clone, Hash)]
-pub struct FileResponse<B> {
-    pub response: FileResponseType<B>,
-}
-
-fn is_content(s: &str) -> bool {
-    s.split('/')
-        .rev()
-        .nth(1)
-        .map(|s| s == "content")
-        .unwrap_or_default()
+pub struct FileResponse {
+    pub response: FileResponseType,
 }
 
 impl<B> TryFrom<http::Request<B>> for FileRequest<B> {
@@ -33,6 +25,7 @@ impl<B> TryFrom<http::Request<B>> for FileRequest<B> {
     fn try_from(req: http::Request<B>) -> Result<Self, Self::Error> {
         let path = req.uri().path();
         let mut file_id = path.split('/').last().ok_or(WopiRequestError::BadRequest)?;
+        // TODO: Remove this content logic once GetFile has transferred
         if file_id == "contents" {
             file_id = path
                 .split('/')
@@ -47,8 +40,8 @@ impl<B> TryFrom<http::Request<B>> for FileRequest<B> {
     }
 }
 
-impl From<FileResponse<Bytes>> for http::Response<Bytes> {
-    fn from(value: FileResponse<Bytes>) -> Self {
+impl From<FileResponse> for http::Response<Bytes> {
+    fn from(value: FileResponse) -> Self {
         value.response.into()
     }
 }
@@ -58,24 +51,21 @@ pub enum FileRequestType<B> {
     CheckFileInfo(CheckFileInfoRequest),
     Lock(LockRequest),
     PutRelativeFile(FileBody<B, PutRelativeFileRequest>),
-    GetFile(GetFileRequest),
 }
 
 #[derive(Debug, Clone, Hash)]
-pub enum FileResponseType<B> {
+pub enum FileResponseType {
     CheckFileInfo(Box<CheckFileInfoResponse>),
     Lock(LockResponse),
     PutRelativeFile(PutRelativeFileResponse),
-    GetFile(FileBody<B, GetFileResponse>),
 }
 
-impl From<FileResponseType<Bytes>> for http::Response<Bytes> {
-    fn from(value: FileResponseType<Bytes>) -> Self {
+impl From<FileResponseType> for http::Response<Bytes> {
+    fn from(value: FileResponseType) -> Self {
         match value {
             FileResponseType::CheckFileInfo(e) => (*e).into(),
             FileResponseType::Lock(e) => e.into(),
             FileResponseType::PutRelativeFile(e) => e.into(),
-            FileResponseType::GetFile(e) => e.into(),
         }
     }
 }
@@ -88,13 +78,7 @@ impl<B> TryFrom<http::Request<B>> for FileRequestType<B> {
             "LOCK" => FileRequestType::Lock(LockRequest::try_from(req.into_parts().0)?),
             "PUT_RELATIVE" => FileRequestType::PutRelativeFile(req.try_into()?),
             _ => {
-                if is_content(&req.uri().to_string()) {
-                    FileRequestType::GetFile(GetFileRequest::try_from(req.into_parts().0)?)
-                } else {
-                    FileRequestType::CheckFileInfo(CheckFileInfoRequest::try_from(
-                        req.into_parts().0,
-                    )?)
-                }
+                FileRequestType::CheckFileInfo(CheckFileInfoRequest::try_from(req.into_parts().0)?)
             }
         };
         Ok(resp)
@@ -422,19 +406,19 @@ pub enum PutRelativeFileResponse {
 #[serde(rename_all = "PascalCase")]
 pub struct PutRelativeFileResponseBody {
     /// The string name of the file, including extension, without a path.
-    name: String,
+    pub name: String,
     /// A string URI of the form http://server/<...>/wopi/files/(file_id)?access_token=(access token), of the newly created file on the host.
     /// This URL is the WOPISrc for the new file with an access token appended.
     /// Or, stated differently, it's the URL to the host’s Files endpoint for
     /// the new file, along with an access token. A GET request to this URL
     /// invokes the CheckFileInfo operation.
-    url: String,
+    pub url: String,
     /// The [HostViewUrl](https://learn.microsoft.com/en-us/microsoft-365/cloud-storage-partner-program/rest/files/checkfileinfo/checkfileinfo-response#hostviewurl),
     /// as a string, for the newly created file.
-    host_view_url: Option<String>,
+    pub host_view_url: Option<String>,
     /// The [HostEditUrl](https://learn.microsoft.com/en-us/microsoft-365/cloud-storage-partner-program/rest/files/checkfileinfo/checkfileinfo-response#hostediturl), as a string,
     /// for the newly created file.
-    host_edit_url: Option<String>,
+    pub host_edit_url: Option<String>,
 }
 
 impl From<&PutRelativeFileResponse> for http::Response<Bytes> {
