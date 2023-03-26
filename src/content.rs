@@ -95,6 +95,11 @@ pub struct PutFileRequest {
 /// The PutFile operation updates a file’s binary contents.
 #[derive(Debug, Clone, Hash)]
 pub enum PutFileResponse {
+    Ok {
+        /// An optional string value indicating the version of the file. Its
+        /// value should be the same as Version value in CheckFileInfo.
+        item_version: Option<String>,
+    },
     ///  Lock mismatch or locked by another interface.
     Conflict {
         /// A string value identifying the current lock on the file.
@@ -151,6 +156,11 @@ impl From<&PutFileResponse> for http::Response<Bytes> {
                     .status(http::StatusCode::CONFLICT);
                 if let Some(fail) = lock_failure_reason {
                     resp = resp.header("X-WOPI-LockFailureReason", fail);
+                }
+            }
+            PutFileResponse::Ok { item_version } => {
+                if let Some(item_version) = item_version {
+                    resp = resp.header("X-WOPI-ItemVersion", item_version);
                 }
             }
         };

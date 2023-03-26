@@ -7,6 +7,8 @@ derive_ref!(CheckFileInfoResponse);
 derive_ref!(LockResponse);
 derive_ref!(PutRelativeFileResponse);
 derive_ref!(GetFileResponse);
+derive_ref!(GetLockResponse);
+derive_ref!(UnlockResponse);
 
 #[derive(Debug, Clone, Hash)]
 pub struct FileRequest<B> {
@@ -51,6 +53,8 @@ pub enum FileRequestType<B> {
     CheckFileInfo(CheckFileInfoRequest),
     Lock(LockRequest),
     PutRelativeFile(FileBody<B, PutRelativeFileRequest>),
+    GetLock(GetLockRequest),
+    Unlock(UnlockRequest),
 }
 
 #[derive(Debug, Clone, Hash)]
@@ -58,6 +62,8 @@ pub enum FileResponseType {
     CheckFileInfo(Box<CheckFileInfoResponse>),
     Lock(LockResponse),
     PutRelativeFile(PutRelativeFileResponse),
+    GetLock(GetLockResponse),
+    Unlock(UnlockResponse),
 }
 
 impl From<FileResponseType> for http::Response<Bytes> {
@@ -66,6 +72,8 @@ impl From<FileResponseType> for http::Response<Bytes> {
             FileResponseType::CheckFileInfo(e) => (*e).into(),
             FileResponseType::Lock(e) => e.into(),
             FileResponseType::PutRelativeFile(e) => e.into(),
+            FileResponseType::GetLock(e) => e.into(),
+            FileResponseType::Unlock(e) => e.into(),
         }
     }
 }
@@ -77,6 +85,8 @@ impl<B> TryFrom<http::Request<B>> for FileRequestType<B> {
         let resp = match try_get_header(&req, "X-WOPI-Override").unwrap_or_default() {
             "LOCK" => FileRequestType::Lock(LockRequest::try_from(req.into_parts().0)?),
             "PUT_RELATIVE" => FileRequestType::PutRelativeFile(req.try_into()?),
+            "GET_LOCK" => FileRequestType::GetLock(GetLockRequest::from(req.into_parts().0)),
+            "UNLOCK" => FileRequestType::Unlock(UnlockRequest::try_from(req.into_parts().0)?),
             _ => {
                 FileRequestType::CheckFileInfo(CheckFileInfoRequest::try_from(req.into_parts().0)?)
             }
@@ -380,12 +390,12 @@ pub enum PutRelativeFileRequest {
     Specific {
         relative_target: String,
         overwrite_relative_target: bool,
-        size: u64,
+        size: i64,
         file_conversion: bool,
     },
     Suggested {
         suggested_target: String,
-        size: u64,
+        size: i64,
         file_conversion: bool,
     },
 }
@@ -543,6 +553,130 @@ impl From<&GetFileResponse> for http::Response<Bytes> {
                 }
             }
             GetFileResponse::TooLarge => resp = resp.status(http::StatusCode::PRECONDITION_FAILED),
+        };
+        resp.body(Bytes::new()).unwrap()
+    }
+}
+
+#[derive(Debug, Clone, Hash)]
+pub struct GetLockRequest;
+
+impl From<http::request::Parts> for GetLockRequest {
+    fn from(_: http::request::Parts) -> Self {
+        Self
+    }
+}
+
+#[derive(Debug, Clone, Hash)]
+pub enum GetLockResponse {
+    Ok {
+        /// A string value identifying the current lock on the file. Unlike
+        /// other lock operations, this header is required when
+        /// responding to the request with either 200 OK or 409
+        /// Conflict.
+        lock: String,
+    },
+    Conflict {
+        /// A string value identifying the current lock on the file. Unlike
+        /// other lock operations, this header is required when
+        /// responding to the request with either 200 OK or 409
+        /// Conflict.
+        lock: String,
+
+        /// An optional string value indicating the cause of a lock failure.
+        /// This header might be included when responding to the request
+        /// with 409 Conflict. There's no standard for how this string
+        /// is formatted, and it must only be used for logging purposes.
+        lock_failure_reason: Option<String>,
+    },
+    NotImplemented,
+}
+
+impl From<&GetLockResponse> for http::Response<Bytes> {
+    fn from(value: &GetLockResponse) -> Self {
+        let mut resp = http::Response::builder();
+        match value {
+            GetLockResponse::Ok { lock } => {
+                resp = resp.header("X-WOPI-Lock", lock);
+            }
+            GetLockResponse::Conflict {
+                lock,
+                lock_failure_reason,
+            } => {
+                resp = resp
+                    .header("X-WOPI-Lock", lock)
+                    .status(http::StatusCode::CONFLICT);
+                if let Some(fail) = lock_failure_reason {
+                    resp = resp.header("X-WOPI-LockFailureReason", fail);
+                }
+            }
+            GetLockResponse::NotImplemented => {
+                resp = resp.status(http::StatusCode::NOT_IMPLEMENTED);
+            }
+        }
+        resp.body(Bytes::new()).unwrap()
+    }
+}
+
+#[derive(Debug, Clone, Hash)]
+pub struct UnlockRequest {
+    /// A string provided by the WOPI client that the host uses to identify the
+    /// lock on the file.
+    pub lock: String,
+}
+
+#[derive(Debug, Clone, Hash)]
+pub enum UnlockResponse {
+    /// Success
+    Ok {
+        /// An optional string value indicating the version of the file. Its
+        /// value should be the same as Version value in CheckFileInfo.
+        item_version: Option<String>,
+    },
+
+    /// Lock mismatch or locked by another interface
+    Conflict {
+        lock: String,
+        lock_failure_reason: Option<String>,
+    },
+
+    // Operation not supported./
+    NotImplemented,
+}
+
+impl TryFrom<http::request::Parts> for UnlockRequest {
+    type Error = WopiRequestError;
+
+    fn try_from(req: http::request::Parts) -> Result<Self, Self::Error> {
+        let lock = try_get_header(&req, "X-WOPI-Lock")?;
+
+        Ok(UnlockRequest { lock: lock.into() })
+    }
+}
+
+impl From<&UnlockResponse> for http::Response<Bytes> {
+    fn from(value: &UnlockResponse) -> Self {
+        let mut resp = http::Response::builder();
+        match value {
+            UnlockResponse::Ok { item_version } => {
+                if let Some(ver) = item_version {
+                    resp = resp.header("X-WOPI-ItemVersion", ver);
+                }
+            }
+            UnlockResponse::Conflict {
+                lock,
+                lock_failure_reason,
+            } => {
+                resp = resp
+                    .header("X-WOPI-Lock", lock)
+                    .status(http::StatusCode::CONFLICT);
+                if let Some(fail) = lock_failure_reason {
+                    resp = resp.header("X-WOPI-LockFailureReason", fail);
+                }
+            }
+            UnlockResponse::NotImplemented => {
+                resp = resp.status(http::StatusCode::NOT_IMPLEMENTED);
+            }
         };
         resp.body(Bytes::new()).unwrap()
     }

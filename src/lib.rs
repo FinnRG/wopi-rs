@@ -9,7 +9,7 @@ pub mod content;
 pub mod ecosystem;
 pub mod file;
 
-#[derive(Debug, Hash, Clone)]
+#[derive(Debug, Hash, Clone, Default)]
 pub struct WopiRequest<T> {
     pub request: T,
     // Authorization
@@ -43,6 +43,34 @@ impl<T> Deref for WopiRequest<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.request
+    }
+}
+
+impl<T: TryFrom<http::Request<B>>, B> TryFrom<http::Request<B>> for WopiRequest<T> {
+    type Error = T::Error;
+
+    fn try_from(value: http::Request<B>) -> Result<Self, Self::Error> {
+        // I'm truly sorry for this abomination
+        let binding = value.uri().clone();
+        let binding = binding.query();
+        let access_token = try_get_query(&binding, "access_token").map(ToOwned::to_owned);
+        let request = value.try_into()?;
+        // TODO: Add remaining properties
+        Ok(Self {
+            request,
+            access_token,
+            request_id: None,
+            app_endpoint: None,
+            requesting_application: None,
+            client_version: None,
+            correlation_id: None,
+            device_id: None,
+            session_id: None,
+            machine_name: None,
+            proof: None,
+            proof_old: None,
+            time_stamp: None,
+        })
     }
 }
 
@@ -159,6 +187,26 @@ impl ParameterProvider for http::request::Parts {
 
     fn get_query(&self) -> Option<&str> {
         self.uri.query()
+    }
+}
+
+impl ParameterProvider for &str {
+    fn get_headers(&self) -> &HeaderMap {
+        unimplemented!()
+    }
+
+    fn get_query(&self) -> Option<&str> {
+        Some(self)
+    }
+}
+
+impl<T: ParameterProvider> ParameterProvider for Option<T> {
+    fn get_headers(&self) -> &HeaderMap {
+        unimplemented!()
+    }
+
+    fn get_query(&self) -> Option<&str> {
+        self.as_ref().and_then(ParameterProvider::get_query)
     }
 }
 
