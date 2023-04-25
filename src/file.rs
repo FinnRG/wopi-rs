@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
 
 use crate::{macros::derive_ref, try_get_header, FileBody, WopiRequestError};
 
@@ -9,6 +10,7 @@ derive_ref!(PutRelativeFileResponse);
 derive_ref!(GetFileResponse);
 derive_ref!(GetLockResponse);
 derive_ref!(UnlockResponse);
+derive_ref!(UnlockAndRelockResponse);
 
 #[derive(Debug, Clone, Hash)]
 pub struct FileRequest<B> {
@@ -55,6 +57,7 @@ pub enum FileRequestType<B> {
     PutRelativeFile(FileBody<B, PutRelativeFileRequest>),
     GetLock(GetLockRequest),
     Unlock(UnlockRequest),
+    UnlockAndRelock(UnlockAndRelockRequest),
 }
 
 #[derive(Debug, Clone, Hash)]
@@ -64,6 +67,7 @@ pub enum FileResponseType {
     PutRelativeFile(PutRelativeFileResponse),
     GetLock(GetLockResponse),
     Unlock(UnlockResponse),
+    UnlockAndRelock(UnlockAndRelockResponse),
 }
 
 impl From<FileResponseType> for http::Response<Bytes> {
@@ -74,6 +78,7 @@ impl From<FileResponseType> for http::Response<Bytes> {
             FileResponseType::PutRelativeFile(e) => e.into(),
             FileResponseType::GetLock(e) => e.into(),
             FileResponseType::Unlock(e) => e.into(),
+            FileResponseType::UnlockAndRelock(e) => e.into(),
         }
     }
 }
@@ -82,8 +87,14 @@ impl<B> TryFrom<http::Request<B>> for FileRequestType<B> {
     type Error = WopiRequestError;
 
     fn try_from(req: http::Request<B>) -> Result<Self, Self::Error> {
+        let headers = req.headers();
         let resp = match try_get_header(&req, "X-WOPI-Override").unwrap_or_default() {
-            "LOCK" => FileRequestType::Lock(LockRequest::try_from(req.into_parts().0)?),
+            "LOCK" if !headers.contains_key("X-WOPI-OldLock") => {
+                FileRequestType::Lock(LockRequest::try_from(req.into_parts().0)?)
+            }
+            "LOCK" if headers.contains_key("X-WOPI-OldLock") => FileRequestType::UnlockAndRelock(
+                UnlockAndRelockRequest::try_from(req.into_parts().0)?,
+            ),
             "PUT_RELATIVE" => FileRequestType::PutRelativeFile(req.try_into()?),
             "GET_LOCK" => FileRequestType::GetLock(GetLockRequest::from(req.into_parts().0)),
             "UNLOCK" => FileRequestType::Unlock(UnlockRequest::try_from(req.into_parts().0)?),
@@ -114,6 +125,7 @@ impl TryFrom<http::request::Parts> for CheckFileInfoRequest {
 /// the properties in the CheckFileInfo response are required. Even properties
 /// that are optional provide important ways for the host to direct the end-user
 /// client experience.
+#[skip_serializing_none]
 #[derive(Debug, Clone, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 pub struct CheckFileInfoResponse {
@@ -143,42 +155,42 @@ pub struct CheckFileInfoResponse {
     ///
     /// These types are passed in the X-WOPI-UrlType request header to signify
     /// which Share URL type to return for the GetShareUrl (files) operation.
-    pub supported_share_url_types: Vec<ShareUrlType>,
+    pub supported_share_url_types: Option<Vec<ShareUrlType>>,
 
-    pub supports_containers: bool,
+    pub supports_containers: Option<bool>,
 
-    pub supports_delete_file: bool,
+    pub supports_delete_file: Option<bool>,
 
-    pub supports_ecosystem: bool,
+    pub supports_ecosystem: Option<bool>,
 
-    pub supports_extended_lock_length: bool,
+    pub supports_extended_lock_length: Option<bool>,
 
     /// A Boolean value that indicates that the host supports the [🚧 GetFileWopiSrc (ecosystem)](https://learn.microsoft.com/en-us/microsoft-365/cloud-storage-partner-program/rest/ecosystem/getfilewopisrc) operation.
-    pub supports_get_file_wopi_src: bool,
+    pub supports_get_file_wopi_src: Option<bool>,
 
     /// A Boolean value that indicates that the host supports the [GetLock](https://learn.microsoft.com/en-us/microsoft-365/cloud-storage-partner-program/rest/files/getlock#getlock) operation.
-    pub supports_get_lock: bool,
+    pub supports_get_lock: Option<bool>,
 
-    pub supports_locks: bool,
+    pub supports_locks: Option<bool>,
 
     /// A Boolean value that indicates that the host supports the [RenameFile](https://learn.microsoft.com/en-us/microsoft-365/cloud-storage-partner-program/rest/files/renamefile) operation.
-    pub supports_rename: bool,
+    pub supports_rename: Option<bool>,
 
-    pub supports_update: bool,
+    pub supports_update: Option<bool>,
 
     /// A Boolean value that indicates that the host supports the [PutUserInfo](https://learn.microsoft.com/en-us/microsoft-365/cloud-storage-partner-program/rest/files/putuserinfo#putuserinfo) operation.
-    pub supports_user_info: bool,
+    pub supports_user_info: Option<bool>,
 
     /// A Boolean value indicating whether the user is authenticated with the
     /// host or not. Hosts should always set this to true for unauthenticated
     /// users, so that clients are aware that the user is anonymous.
-    pub is_anonymous_user: bool,
+    pub is_anonymous_user: Option<bool>,
 
     /// A Boolean value indicating whether the user is an education user or not.
-    pub is_edu_user: bool,
+    pub is_edu_user: Option<bool>,
 
     /// A Boolean value indicating whether the user is a business user or not.
-    pub license_check_for_edit_is_enabled: bool,
+    pub license_check_for_edit_is_enabled: Option<bool>,
 
     /// A string that is the name of the user, suitable for displaying in UI.
     pub user_friendly_name: Option<String>,
@@ -192,31 +204,31 @@ pub struct CheckFileInfoResponse {
 
     /// A Boolean value that indicates that, for this user, the file cannot be
     /// changed.
-    pub read_only: bool,
+    pub read_only: Option<bool>,
 
     /// A Boolean value that indicates that the user has permission to view a
     /// broadcast of this file.
-    pub user_can_attend: bool,
+    pub user_can_attend: Option<bool>,
 
     /// A Boolean value that indicates the user does not have sufficient
     /// permission to create new files on the WOPI server. Setting this to true
     /// tells the WOPI client that calls to PutRelativeFile will fail for this
     /// user on the current file.
-    pub user_can_not_write_relative: bool,
+    pub user_can_not_write_relative: Option<bool>,
 
     /// A Boolean value that indicates that the user has permission to broadcast
     /// this file to a set of users who have permission to broadcast or view a
     /// broadcast of the current file.
-    pub user_can_present: bool,
+    pub user_can_present: Option<bool>,
 
     /// A Boolean value that indicates the user has permission to rename the
     /// current file.
-    pub user_can_rename: bool,
+    pub user_can_rename: Option<bool>,
 
     /// A Boolean value that indicates that the user has permission to alter the
     /// file. Setting this to true tells the WOPI client that it can call
     /// PutFile on behalf of the user.
-    pub user_can_write: bool,
+    pub user_can_write: Option<bool>,
 
     /// A URI to a web page that the WOPI client should navigate to when the
     /// application closes, or in the event of an unrecoverable error.
@@ -386,6 +398,69 @@ impl From<&LockResponse> for http::Response<Bytes> {
 }
 
 #[derive(Debug, Clone, Hash)]
+pub struct UnlockAndRelockRequest {
+    /// A string provided by the WOPI client that is the existing lock on the
+    /// file
+    pub old_lock: String,
+
+    /// A string provided by the WOPI client that is the existing lock on the
+    /// file.
+    pub lock: String,
+}
+
+#[derive(Debug, Clone, Hash)]
+pub enum UnlockAndRelockResponse {
+    /// Success
+    Ok,
+
+    /// Lock mismatch or locked by another interface.
+    Conflict {
+        ///  A string value identifying the current lock on the file.
+        lock: String,
+
+        /// An optional string value indicating the cause of a lock failure.
+        lock_failure_reason: Option<String>,
+    },
+}
+
+impl TryFrom<http::request::Parts> for UnlockAndRelockRequest {
+    type Error = WopiRequestError;
+
+    fn try_from(req: http::request::Parts) -> Result<Self, Self::Error> {
+        let lock = try_get_header(&req, "X-WOPI-Lock")?;
+        let old_lock = try_get_header(&req, "X-WOPI-OldLock")?;
+
+        Ok(UnlockAndRelockRequest {
+            old_lock: old_lock.to_owned(),
+            lock: lock.to_owned(),
+        })
+    }
+}
+
+impl From<&UnlockAndRelockResponse> for http::Response<Bytes> {
+    fn from(value: &UnlockAndRelockResponse) -> Self {
+        let mut resp = http::Response::builder();
+
+        match value {
+            UnlockAndRelockResponse::Ok => {}
+            UnlockAndRelockResponse::Conflict {
+                lock,
+                lock_failure_reason,
+            } => {
+                resp = resp
+                    .header("X-WOPI-Lock", lock)
+                    .status(http::StatusCode::CONFLICT);
+                if let Some(fail) = lock_failure_reason {
+                    resp = resp.header("X-WOPI-LockFailureReason", fail);
+                }
+            }
+        };
+
+        resp.body(Bytes::new()).unwrap()
+    }
+}
+
+#[derive(Debug, Clone, Hash)]
 pub enum PutRelativeFileRequest {
     Specific {
         relative_target: String,
@@ -412,6 +487,7 @@ pub enum PutRelativeFileResponse {
     Unsupported,
 }
 
+#[skip_serializing_none]
 #[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PutRelativeFileResponseBody {
